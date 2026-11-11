@@ -18,6 +18,11 @@
 .PARAMETER Monitor
     Nach dem Flashen den seriellen Monitor öffnen (Beenden mit Strg+C).
 
+.PARAMETER ForkTag
+    Kennung, die an die Version angehängt wird (Standard: tomcek42). Die
+    Firmware meldet dann z. B. v2.4.0.tomcek42; die Basis ist der letzte
+    Release-Tag (git describe), auf dem der Branch aufsetzt.
+
 .EXAMPLE
     .\tools\flash-lcd154.ps1
     .\tools\flash-lcd154.ps1 -Rotation 1
@@ -30,7 +35,9 @@ param(
     [Nullable[int]]$Rotation,
     [string]$Port,
     [switch]$BuildOnly,
-    [switch]$Monitor
+    [switch]$Monitor,
+    [ValidatePattern('^[A-Za-z0-9_]+$')]
+    [string]$ForkTag = 'tomcek42'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,14 +61,26 @@ if (-not (Test-Path (Join-Path $Firmware 'platformio.ini'))) {
 # Der ESP-Toolinstaller verweigert MSYS/Git-Bash-Umgebungen.
 Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
 
-# --- Optionale Drehung als Build-Flag (überschreibt board.h) ---
+# --- Firmware-Version: letzter Release-Tag + Fork-Kennung ---
+# Die App vergleicht Versionen numerisch nach Punkten; '-' oder '+' gelten als
+# Vorabversion (älter als das Release) und lösen ein Update-Angebot aus. Ein
+# weiteres Punkt-Segment zählt dagegen als 0: v2.4.0.tomcek42 == v2.4.0 – kein
+# Angebot, bis upstream ein neueres Release (z. B. v2.4.1) veröffentlicht.
+$baseTag = (& git -C $RepoDir describe --tags --abbrev=0 --match 'v[0-9]*' 2>$null)
+if ($LASTEXITCODE -ne 0 -or -not $baseTag) {
+    throw "Kein Release-Tag gefunden (git describe). Mit 'git fetch origin --tags' nachladen."
+}
+$Version = "$($baseTag.Trim()).$ForkTag"
+
+$flags = @("-DCLAWD_VERSION=\`"$Version\`"")
 if ($null -ne $Rotation) {
-    $env:PLATFORMIO_BUILD_FLAGS = "-DLCD_ROTATION=$Rotation"
+    $flags += "-DLCD_ROTATION=$Rotation"
     Write-Host "Drehung: LCD_ROTATION=$Rotation (überschreibt board.h)" -ForegroundColor Cyan
 } else {
-    Remove-Item Env:PLATFORMIO_BUILD_FLAGS -ErrorAction SilentlyContinue
     Write-Host "Drehung: Wert aus board.h" -ForegroundColor Cyan
 }
+$env:PLATFORMIO_BUILD_FLAGS = $flags -join ' '
+Write-Host "Version: $Version" -ForegroundColor Cyan
 
 # --- Kompilieren ---
 Write-Host "`n==> Kompiliere $Env ..." -ForegroundColor Yellow
